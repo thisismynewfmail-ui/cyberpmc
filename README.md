@@ -108,7 +108,13 @@ lives in the chat itself; the tab is only where you set it up.
 - **Per-session server toggles**: the **MCP TOOLS** menu in the TERMINAL sidebar
   (above **NEW / STOP**) lists every installed server with a switch, so you can
   enable or disable a whole server for the current session's context without
-  touching the global config.
+  touching the global config. Disabling a server here does **not** stop its
+  process — it stays running (the status dot keeps its green/running colour) and
+  the row shows a **MUTED** badge. The server is simply pulled from the model's
+  view for this session: its tools are no longer advertised in the `tools` array
+  *or* named in the system briefing, so the model can't see or call them. Flip it
+  back on to re-advertise without a respawn. Use **STOP** on the Tools tab when
+  you actually want to kill the process.
 - **Master switch**: *ENABLE MCP TOOLS* arms the feature. With it off, no tools
   are ever advertised and a turn is a single plain reply — identical to a build
   without MCP.

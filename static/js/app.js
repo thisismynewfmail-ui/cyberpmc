@@ -1112,21 +1112,47 @@ function renderMcpRail() {
   }
   for (const s of servers) {
     const active = s.session_active !== false;
+    const running = s.status === "running";
     const row = document.createElement("div");
-    const stateCls = s.status === "running" ? "run" : (s.status === "error" ? "err" :
+    const stateCls = running ? "run" : (s.status === "error" ? "err" :
       (s.status === "starting" ? "starting" : ""));
-    row.className = "mcp-rail-row " + stateCls + (active ? "" : " off-server");
-    row.innerHTML = `<i class="rdot"></i><span class="rname"></span>` +
-      `<span class="rcount">${s.status === "running" ? (s.tools || []).length + "t" : ""}</span>`;
+    // A disabled server is NOT stopped — its process stays alive (the dot keeps
+    // its running colour); it is simply pulled from the model's view (its tools
+    // aren't advertised) for this session. The MUTED badge makes that explicit.
+    row.className = "mcp-rail-row " + stateCls + (active ? "" : " muted");
+    row.innerHTML = `<i class="rdot"></i><span class="rname"></span><span class="rcount"></span>`;
     row.querySelector(".rname").textContent = s.name;
+
+    const badge = row.querySelector(".rcount");
+    const paintBadge = (act) => {
+      if (!running) {
+        badge.textContent = s.status === "error" ? "ERR"
+          : (s.status === "starting" ? "···" : "OFF");
+        badge.className = "rcount";
+      } else if (act) {
+        badge.textContent = (s.tools || []).length + "t";
+        badge.className = "rcount live";
+      } else {
+        // Running, but hidden from the model for this session.
+        badge.textContent = "MUTED";
+        badge.className = "rcount muted";
+      }
+    };
+    paintBadge(active);
+
+    const tip = (act) => act
+      ? "Disable for this session — keeps the server running, just hides its tools from the model"
+      : "Enable for this session — advertise this server's tools to the model again";
     const sw = document.createElement("button");
     sw.className = "switch" + (active ? " on" : "");
     sw.setAttribute("role", "switch");
-    sw.title = "Use this server in the current session";
+    sw.title = tip(active);
     sw.addEventListener("click", () => {
       const val = !sw.classList.contains("on");
       sw.classList.toggle("on", val);
-      row.classList.toggle("off-server", !val);
+      row.classList.toggle("muted", !val);
+      sw.title = tip(val);
+      paintBadge(val);
       socket.emit("mcp_session_toggle", { server: s.name, enabled: val });
     });
     row.appendChild(sw);
