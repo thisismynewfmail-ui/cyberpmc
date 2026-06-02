@@ -515,7 +515,25 @@ def _emit_tts_audio(seq, wav_bytes, sample_rate):
     })
 
 
-def _execute_tool_calls(sid, tool_calls, name_map):
+def _clip_tool_text(text: str, limit: int) -> str:
+    """Bound a tool result so one oversized observation can't blow the context.
+
+    Browser snapshots in particular can run to hundreds of KB; folded back into
+    the prompt verbatim they push it far past the model's window and the endpoint
+    stalls. We keep a large head (where a snapshot's URL/title and top of the
+    accessibility tree live) plus a small tail, and mark what was dropped so the
+    model knows to narrow its next query."""
+    if not text or limit <= 0 or len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    head = int(limit * 0.85)
+    tail = limit - head
+    marker = (f"\n\n[… {omitted} characters truncated to fit the context window; "
+              f"narrow the query or target a specific element/section …]\n\n")
+    return text[:head] + marker + (text[-tail:] if tail > 0 else "")
+
+
+def _execute_tool_calls(sid, tool_calls, name_map, max_result_chars=0):
     """Run each requested tool through its MCP server, storing a `tool` message
     per call (live "running" → final result) so the transcript shows the work.
 
@@ -536,22 +554,35 @@ def _execute_tool_calls(sid, tool_calls, name_map):
         })
         broadcast_active()
 
-        # Parse the streamed argument string into an object for the MCP call.
+        # Everything from here is wrapped so the "running" placeholder is ALWAYS
+        # resolved — a parse slip, an unknown tool, or an unexpected error becomes
+        # a tool result the model can react to, never a block stuck on "executing…".
         try:
-            args = json.loads(tc["arguments"]) if tc.get("arguments", "").strip() else {}
-            if not isinstance(args, dict):
-                args = {"value": args}
-        except json.JSONDecodeError:
-            args = {}
+            route = name_map.get(tname)
+            if route is None:
+                out = {"text": f"[tool error] unknown or disabled tool '{tname}'",
+                       "is_error": True}
+            else:
+                # Parse the streamed argument string into an object for the call.
+                raw_args = tc.get("arguments") or ""
+                try:
+                    args = json.loads(raw_args) if raw_args.strip() else {}
+                except json.JSONDecodeError as e:
+                    # Surface the bad JSON back to the model instead of silently
+                    # calling with no arguments (which would mask the mistake).
+                    out = {"text": f"[tool error] arguments were not valid JSON "
+                                   f"({str(e)[:80]}): {raw_args[:200]}", "is_error": True}
+                else:
+                    if not isinstance(args, dict):
+                        args = {"value": args}
+                    out = mcp_manager.call(route[0], route[1], args)
+        except Exception as e:  # noqa: BLE001
+            out = {"text": f"[tool error] {str(e)[:300]}", "is_error": True}
 
-        route = name_map.get(tname)
-        if route:
-            out = mcp_manager.call(route[0], route[1], args)
-        else:
-            out = {"text": f"[tool error] unknown tool '{tname}'", "is_error": True}
-
+        # Clip an oversized result (e.g. a huge browser_snapshot) before it is
+        # stored and replayed, so it can't overflow the context window.
         store.update_message(sid, tmsg["id"], {
-            "content": out["text"],
+            "content": _clip_tool_text(out["text"], max_result_chars),
             "status": "error" if out.get("is_error") else "ok",
         })
         broadcast_active()
@@ -630,7 +661,8 @@ def _run_generation(sid, pid, text, images, settings, tools=None, name_map=None)
                 break  # a normal final answer — the turn is complete
 
             # --- transition: run the tools, fold results back into context ---
-            _execute_tool_calls(sid, tool_calls, name_map)
+            _execute_tool_calls(sid, tool_calls, name_map,
+                                max_result_chars=int(settings.get("mcp_max_result_chars", 0) or 0))
 
             if turn == max_iters - 1:
                 socketio.emit("toast", {"text": f"Tool loop cap reached ({max_iters})"})
@@ -653,6 +685,10 @@ def _run_generation(sid, pid, text, images, settings, tools=None, name_map=None)
         socketio.emit("toast", {"text": f"Link error: {str(e)[:80]}"})
         socketio.start_background_task(run_link_test)
     finally:
+        # Safety net: never leave a tool block wedged on "executing…". If the
+        # turn ended (error, stop, or otherwise) while a tool message was still
+        # marked running, finalize it so the transcript settles.
+        _finalize_running_tools(sid)
         if tts_stream is not None:
             # Honour a user stop by dropping queued speech; otherwise speak the
             # final partial clause before the worker drains and exits.
@@ -666,6 +702,24 @@ def _run_generation(sid, pid, text, images, settings, tools=None, name_map=None)
         broadcast_busy()
         broadcast_active()
         broadcast_sessions()
+
+
+def _finalize_running_tools(sid):
+    """Resolve any lingering ``status == "running"`` tool messages in a session.
+
+    ``_execute_tool_calls`` already finalizes every call it makes, so this only
+    fires if the generation thread unwound before a tool message was updated —
+    in which case we close it out as an error rather than leaving the UI showing
+    "executing…" forever."""
+    sess = store.get_session(sid)
+    if not sess:
+        return
+    for m in sess["messages"]:
+        if m.get("role") == "tool" and m.get("status") == "running":
+            store.update_message(sid, m["id"], {
+                "content": m.get("content") or "[tool error] interrupted before completion",
+                "status": "error",
+            })
 
 
 def run(host=None, port=None):

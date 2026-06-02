@@ -263,6 +263,45 @@ def context_report(messages: list[dict], settings: dict) -> dict:
 # --------------------------------------------------------------------------
 # Request building
 # --------------------------------------------------------------------------
+def tool_system_note(tools: list) -> str:
+    """A short natural-language briefing appended to the system prompt when tools
+    are advertised.
+
+    The OpenAI ``tools`` array alone is enough for strong models, but many local
+    backends only reliably *use* tools when the system prompt also tells them the
+    tools exist and how to invoke them. We therefore list the enabled tools by
+    name and spell out the calling contract — call by emitting a function call
+    (not prose), match the JSON schema, send ``{}`` for a no-argument tool — plus
+    the one ordering rule the browser tools need (navigate before you read a
+    page) so the model stops reaching for a snapshot/screenshot of a blank tab.
+    """
+    names = []
+    for t in tools or []:
+        fn = t.get("function") if isinstance(t, dict) else None
+        name = (fn or {}).get("name") if isinstance(fn, dict) else None
+        if name:
+            names.append(name)
+    if not names:
+        return ""
+    note = [
+        "# Tools",
+        "You can call these tools to take real actions: " + ", ".join(names) + ".",
+        "Invoke a tool by emitting an actual tool/function call — never describe "
+        "the call in prose. Use the exact tool name and pass arguments as JSON "
+        "matching that tool's schema; send an empty object {} when a tool takes "
+        "no arguments. After a tool returns, use its result to keep working or to "
+        "write your final answer.",
+    ]
+    if any(n.startswith("browser_") for n in names):
+        note.append(
+            "For browser tools, open a page with browser_navigate before reading "
+            "it; use browser_snapshot (a structured accessibility tree) to read or "
+            "act on the page, and reserve browser_take_screenshot for when an "
+            "actual image is needed."
+        )
+    return "\n".join(note)
+
+
 def _render_template(template: str, system_message: str, messages: list[dict]) -> str:
     from jinja2 import Environment, BaseLoader
     env = Environment(loader=BaseLoader(), trim_blocks=False, lstrip_blocks=False)
@@ -307,6 +346,14 @@ def build_request(messages_store: list[dict], settings: dict,
         history.append(entry)
 
     sys_text = settings.get("system_message", "") or ""
+    # Brief the model on the tools it may call. Raw /v1/completions (custom
+    # template) mode can't carry a `tools` array, so the note only applies — and
+    # is only true — on the chat-completions path. Folding it into the system
+    # message (before cropping) keeps it token-counted and never dropped.
+    if tools and not settings.get("use_custom_template", False):
+        note = tool_system_note(tools)
+        if note:
+            sys_text = (sys_text + "\n\n" + note).strip() if sys_text else note
     system_msg = {"role": "system", "content": sys_text} if sys_text else None
 
     kept, start, prompt_tokens = crop_to_context(system_msg, history, settings)
