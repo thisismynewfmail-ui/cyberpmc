@@ -12,6 +12,7 @@ can be toggled at runtime without rebinding the socket.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import threading
 
@@ -19,11 +20,16 @@ from flask import Flask, render_template, request, send_file
 from flask_socketio import SocketIO, emit
 
 from . import config, llm, tts
+from .mcp import manager as mcp_manager, build_tool_specs
 from .state import StateStore
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 store = StateStore()
+
+# Stage the configured MCP servers (stopped) so they are ready to START from the
+# Tools tab. Spawning is always explicit — nothing launches on boot.
+mcp_manager.configure(store.get_settings().get("mcp_servers", {}))
 
 app = Flask(
     __name__,
@@ -142,6 +148,28 @@ def broadcast_busy():
     socketio.emit("busy", {"busy": _busy})
 
 
+def mcp_state_payload() -> dict:
+    """Full MCP snapshot: master switch, every server's live status + tools, the
+    stored JSON config, and the active session's per-server toggles."""
+    s = store.get_settings()
+    session_active = store.session_mcp_active(store.active_id())
+    tool_enabled = s.get("mcp_tool_enabled", {}) or {}
+    servers = mcp_manager.status_payload()
+    for srv in servers:
+        srv["session_active"] = session_active.get(srv["name"], True)
+        for t in srv["tools"]:
+            t["enabled"] = tool_enabled.get(t["key"], True)
+    return {
+        "enabled": bool(s.get("mcp_enabled", False)),
+        "servers": servers,
+        "config_json": json.dumps({"mcpServers": s.get("mcp_servers", {})}, indent=2),
+    }
+
+
+def broadcast_mcp():
+    socketio.emit("mcp_state", mcp_state_payload())
+
+
 def run_link_test():
     global _link_seq
     with _link_seq_lock:
@@ -192,6 +220,7 @@ def on_connect(auth):
     emit("sessions", {"sessions": store.list_sessions(), "active_id": store.active_id()})
     emit("session_sync", active_session_payload())
     emit("voices", tts.voices_payload(store.get_settings()))
+    emit("mcp_state", mcp_state_payload())
     emit("busy", {"busy": _busy})
     emit("clients", {"count": _client_count()})
     broadcast_clients()
@@ -217,6 +246,9 @@ def on_update_settings(data):
     broadcast_settings()
     # Context-affecting changes -> refresh the horizon read-out everywhere.
     broadcast_active()
+    # The MCP master switch lives in settings; keep the Tools surface in sync.
+    if "mcp_enabled" in patch:
+        broadcast_mcp()
 
     new = store.get_settings()
     # If LAN visibility was just disabled, drop any non-loopback screens.
@@ -286,6 +318,86 @@ def on_load_sampler_defaults(_data=None):
 
 
 # --------------------------------------------------------------------------
+# MCP tools
+# --------------------------------------------------------------------------
+@socketio.on("mcp_refresh")
+def on_mcp_refresh(_data=None):
+    emit("mcp_state", mcp_state_payload())
+
+
+@socketio.on("mcp_set_enabled")
+def on_mcp_set_enabled(data):
+    store.update_settings({"mcp_enabled": bool((data or {}).get("enabled"))})
+    broadcast_settings()
+    broadcast_mcp()
+
+
+@socketio.on("mcp_save_servers")
+def on_mcp_save_servers(data):
+    """Persist the LM Studio-style mcpServers JSON, then reconcile the manager."""
+    raw = (data or {}).get("json", "")
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except json.JSONDecodeError as e:
+        emit("toast", {"text": f"Invalid JSON: {str(e)[:80]}"})
+        return
+    # Accept either the full {"mcpServers": {...}} document or a bare mapping.
+    servers = parsed.get("mcpServers") if isinstance(parsed, dict) and "mcpServers" in parsed else parsed
+    if not isinstance(servers, dict):
+        emit("toast", {"text": "Expected an object of MCP servers"})
+        return
+    store.update_settings({"mcp_servers": servers})
+    mcp_manager.configure(servers)
+    broadcast_settings()
+    broadcast_mcp()
+    emit("toast", {"text": f"Saved {len(servers)} MCP server(s)"})
+
+
+@socketio.on("mcp_start_server")
+def on_mcp_start_server(data):
+    name = (data or {}).get("name")
+    if not name:
+        return
+    broadcast_mcp()  # reflect the "starting" state immediately
+
+    def _start():
+        ok = mcp_manager.start(name)
+        broadcast_mcp()
+        socketio.emit("toast", {"text": (f"MCP '{name}' connected" if ok
+                                          else f"MCP '{name}' failed to start")})
+
+    socketio.start_background_task(_start)
+
+
+@socketio.on("mcp_stop_server")
+def on_mcp_stop_server(data):
+    name = (data or {}).get("name")
+    if name and mcp_manager.stop(name):
+        broadcast_mcp()
+        emit("toast", {"text": f"MCP '{name}' stopped"})
+
+
+@socketio.on("mcp_toggle_tool")
+def on_mcp_toggle_tool(data):
+    key = (data or {}).get("key")
+    if not key:
+        return
+    enabled = bool((data or {}).get("enabled"))
+    store.update_settings({"mcp_tool_enabled": {key: enabled}})
+    broadcast_mcp()
+
+
+@socketio.on("mcp_session_toggle")
+def on_mcp_session_toggle(data):
+    server = (data or {}).get("server")
+    if not server:
+        return
+    enabled = bool((data or {}).get("enabled"))
+    if store.set_session_mcp(store.active_id(), server, enabled):
+        broadcast_mcp()
+
+
+# --------------------------------------------------------------------------
 # Sessions
 # --------------------------------------------------------------------------
 @socketio.on("new_session")
@@ -294,6 +406,7 @@ def on_new_session(data=None):
     store.new_session(name)
     broadcast_sessions()
     broadcast_active()
+    broadcast_mcp()  # the new session's per-server toggles take effect
 
 
 @socketio.on("load_session")
@@ -301,6 +414,7 @@ def on_load_session(data):
     if store.set_active((data or {}).get("id")):
         broadcast_sessions()
         broadcast_active()
+        broadcast_mcp()
 
 
 @socketio.on("rename_session")
@@ -317,6 +431,7 @@ def on_duplicate_session(data):
         store.set_active(new_id)
         broadcast_sessions()
         broadcast_active()
+        broadcast_mcp()
 
 
 @socketio.on("delete_session")
@@ -324,6 +439,7 @@ def on_delete_session(data):
     if store.delete_session((data or {}).get("id")):
         broadcast_sessions()
         broadcast_active()
+        broadcast_mcp()
 
 
 @socketio.on("clear_session")
@@ -368,6 +484,10 @@ def on_send_message(data):
     sid = store.active_id()
     settings = store.get_settings()
 
+    # Resolve the tool set for THIS generation up front so it stays stable for
+    # the whole turn (master switch + running servers + session + per-tool gates).
+    tools, name_map = build_tool_specs(settings, store.session_mcp_active(sid))
+
     # 1. record the user's turn (images ride along on the message record)
     user_msg = {"role": "user", "content": text}
     if images:
@@ -383,7 +503,8 @@ def on_send_message(data):
     pid = placeholder["id"]
     broadcast_active()
 
-    socketio.start_background_task(_run_generation, sid, pid, text, images, settings)
+    socketio.start_background_task(_run_generation, sid, pid, text, images, settings,
+                                   tools, name_map)
 
 
 def _emit_tts_audio(seq, wav_bytes, sample_rate):
@@ -394,12 +515,58 @@ def _emit_tts_audio(seq, wav_bytes, sample_rate):
     })
 
 
-def _run_generation(sid, pid, text, images, settings):
-    global _busy
-    buf = []
+def _execute_tool_calls(sid, tool_calls, name_map):
+    """Run each requested tool through its MCP server, storing a `tool` message
+    per call (live "running" → final result) so the transcript shows the work.
 
-    # Spin up the Piper per-block speech pipeline only when it is actually in
-    # use; the noise engine is handled entirely client-side.
+    This is the hand-off between the two systems: the model's requested calls are
+    routed to the MCP manager and their observations are written back into the
+    session as `tool` messages, ready to be replayed into the next model turn.
+    """
+    for tc in tool_calls:
+        tname = tc["name"]
+        # Show the call as pending before the (possibly slow) tool runs.
+        tmsg = store.add_message(sid, {
+            "role": "tool",
+            "tool_call_id": tc["id"],
+            "name": tname,
+            "content": "",
+            "server": (name_map.get(tname) or ("", ""))[0],
+            "status": "running",
+        })
+        broadcast_active()
+
+        # Parse the streamed argument string into an object for the MCP call.
+        try:
+            args = json.loads(tc["arguments"]) if tc.get("arguments", "").strip() else {}
+            if not isinstance(args, dict):
+                args = {"value": args}
+        except json.JSONDecodeError:
+            args = {}
+
+        route = name_map.get(tname)
+        if route:
+            out = mcp_manager.call(route[0], route[1], args)
+        else:
+            out = {"text": f"[tool error] unknown tool '{tname}'", "is_error": True}
+
+        store.update_message(sid, tmsg["id"], {
+            "content": out["text"],
+            "status": "error" if out.get("is_error") else "ok",
+        })
+        broadcast_active()
+
+
+def _run_generation(sid, pid, text, images, settings, tools=None, name_map=None):
+    global _busy
+    name_map = name_map or {}
+    # A mutable cursor so the streaming callback always targets the current
+    # assistant turn — across every hop of the tool loop.
+    cur = {"pid": pid, "buf": []}
+
+    # Spin up the Piper per-block speech pipeline ONCE for the whole turn (it is
+    # not reset between tool hops, so spoken output is never cut off mid-reply);
+    # the noise engine is handled entirely client-side.
     tts_stream = None
     if (settings.get("voice_enabled")
             and settings.get("tts_engine") == "piper"
@@ -409,37 +576,75 @@ def _run_generation(sid, pid, text, images, settings):
         tts_stream = tts.TTSStreamer(settings, _emit_tts_audio)
 
     def on_delta(delta):
-        buf.append(delta)
+        cur["buf"].append(delta)
         # Keep the in-memory placeholder current for late-joining screens
         # without thrashing the disk on every token.
-        store.buffer_message(sid, pid, "".join(buf))
-        socketio.emit("gen_token", {"session_id": sid, "message_id": pid, "delta": delta})
+        store.buffer_message(sid, cur["pid"], "".join(cur["buf"]))
+        socketio.emit("gen_token", {"session_id": sid, "message_id": cur["pid"], "delta": delta})
         if tts_stream is not None:
             tts_stream.feed(delta)
 
+    max_iters = max(1, int(settings.get("mcp_max_iterations", 8) or 8))
+
     try:
-        # Request history excludes the just-added user turn + placeholder;
-        # the user turn is re-supplied via `extra_user` so the thinking
-        # directive can be applied to it.
-        sess = store.get_session(sid)
-        req_history = sess["messages"][:-2] if sess else []
-        result = llm.stream_completion(
-            req_history, settings, text, on_delta,
-            stop_flag=_stop_event.is_set,
-            user_images=images,
-        )
-        store.update_message(sid, pid, {
-            "content": result["raw"],
-            "clean": result["clean"],
-            "think": result["think"],
-            "has_think": result["has_think"],
-            "meta": result["meta"],
-            "streaming": False,
-        })
+        for turn in range(max_iters):
+            first = (turn == 0)
+            cur["buf"] = []
+            # History excludes the current (streaming) placeholder, which is
+            # always the last stored message. On the first hop the user turn is
+            # re-supplied via `extra_user` so the thinking directive applies; on
+            # later hops the prior calls + tool results are already in history.
+            sess = store.get_session(sid)
+            hist = sess["messages"][:-1] if sess else []
+            if first:
+                req_history = hist[:-1]   # drop the user turn (re-supplied below)
+                extra_user, extra_images = text, images
+            else:
+                req_history = hist
+                extra_user, extra_images = None, None
+
+            result = llm.stream_completion(
+                req_history, settings, extra_user, on_delta,
+                stop_flag=_stop_event.is_set,
+                user_images=extra_images,
+                tools=tools or None,
+            )
+
+            stopped = _stop_event.is_set()
+            tool_calls = result["tool_calls"] if (tools and not stopped) else []
+
+            patch = {
+                "content": result["raw"],
+                "clean": result["clean"],
+                "think": result["think"],
+                "has_think": result["has_think"],
+                "meta": result["meta"],
+                "streaming": False,
+            }
+            if tool_calls:
+                patch["tool_calls"] = tool_calls
+            store.update_message(sid, cur["pid"], patch)
+            broadcast_active()
+
+            if not tool_calls:
+                break  # a normal final answer — the turn is complete
+
+            # --- transition: run the tools, fold results back into context ---
+            _execute_tool_calls(sid, tool_calls, name_map)
+
+            if turn == max_iters - 1:
+                socketio.emit("toast", {"text": f"Tool loop cap reached ({max_iters})"})
+                break
+
+            # Open a fresh placeholder for the model's next turn and continue.
+            placeholder = store.add_message(sid, {"role": "assistant", "content": "", "streaming": True})
+            cur["pid"] = placeholder["id"]
+            broadcast_active()
+
     except Exception as e:  # noqa: BLE001
-        store.update_message(sid, pid, {
-            "content": "".join(buf),
-            "clean": "".join(buf),
+        store.update_message(sid, cur["pid"], {
+            "content": "".join(cur["buf"]),
+            "clean": "".join(cur["buf"]),
             "streaming": False,
             "error": True,
             "error_detail": str(e)[:300],

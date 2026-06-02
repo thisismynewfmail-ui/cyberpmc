@@ -76,6 +76,7 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" data-view="terminal"><i>▷</i> TERMINAL</button>
     <button class="tab" data-view="sessions"><i>▤</i> SESSIONS</button>
+    <button class="tab" data-view="tools"><i>⛭</i> TOOLS</button>
     <button class="tab" data-view="settings"><i>⚙</i> SETTINGS</button>
     <button class="tab" data-view="network"><i>⬡</i> NETWORK</button>
     <span class="tab-underline" id="tab-underline"></span>
@@ -129,6 +130,19 @@
           <li><span>TOKENS</span><b id="vital-tokens">0</b></li>
           <li><span>HORIZON</span><b id="vital-horizon">0</b></li>
         </ul>
+
+        <!-- per-session MCP server toggles -->
+        <div class="mcp-rail" id="mcp-rail">
+          <div class="mcp-rail-head" id="mcp-rail-head">
+            <span class="mcp-rail-title"><i>⛭</i> MCP TOOLS</span>
+            <span class="mcp-rail-state" id="mcp-rail-state">OFF</span>
+            <span class="mcp-rail-chev" id="mcp-rail-chev">▾</span>
+          </div>
+          <div class="mcp-rail-body" id="mcp-rail-body">
+            <div class="mcp-rail-list" id="mcp-rail-list"></div>
+            <button class="mcp-rail-config" id="mcp-rail-config">⛭ CONFIGURE TOOLS →</button>
+          </div>
+        </div>
 
         <div class="core-actions">
           <button class="btn ghost" id="btn-new-quick"><i>＋</i> NEW</button>
@@ -207,6 +221,61 @@
         <p class="section-note">Sessions are shared live across every connected screen. The active
           session is highlighted; selecting one switches every screen to it.</p>
         <div class="session-list" id="session-list"></div>
+      </div>
+    </section>
+
+    <!-- --------- TOOLS (MCP) --------- -->
+    <section class="view view-tools" data-view="tools">
+      <div class="settings-scroll" id="tools-scroll">
+
+        <!-- MASTER -->
+        <div class="panel cfg-card speech-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>⛭ MCP TOOLS</h3>
+            <span class="speech-chip" id="mcp-chip"><i class="dot"></i><b>OFF</b></span></div>
+
+          <div class="field toggle-field span-all hero-toggle">
+            <span>ENABLE MCP TOOLS <em>(let the cognition core call tools mid-reply)</em></span>
+            <button class="switch lg" data-toggle="mcp_enabled" role="switch"></button>
+          </div>
+          <p class="cfg-foot">MCP (Model Context Protocol) servers expose <b>tools</b> the model can
+            invoke while it answers — it may <b>think</b>, call a tool such as <code>browser_snapshot</code>,
+            read the result, then continue. Tool calls run inside the chat and are folded away by default so
+            they never interrupt spoken output. With this switch off, no tools are sent and the terminal
+            behaves as a plain chat.</p>
+        </div>
+
+        <!-- SERVERS JSON -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ MCP SERVERS</h3>
+            <button class="btn mini" id="btn-mcp-save"><i>⤓</i> SAVE SERVERS</button></div>
+          <label class="field span-all">
+            <span>SERVER CONFIG — LM Studio-style <code>mcpServers</code> JSON</span>
+            <textarea class="mono-text" id="mcp-config" rows="9"
+                      placeholder='{ "mcpServers": { "playwright": { "command": "npx", "args": ["@playwright/mcp@latest"] } } }'></textarea>
+            <em class="json-status" id="mcp-json-status"></em>
+          </label>
+          <p class="cfg-foot">Exactly like LM Studio: paste a stored <code>mcpServers</code> document and press
+            <b>SAVE SERVERS</b>. Each server is then spawned on demand with its <b>START</b> button below.</p>
+        </div>
+
+        <!-- SERVER LIST + TOOL TOGGLES -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ INSTALLED SERVERS</h3>
+            <button class="btn mini ghost" id="btn-mcp-refresh"><i>⟲</i> REFRESH</button></div>
+          <div class="mcp-server-list" id="mcp-server-list"></div>
+          <p class="cfg-foot">Press <b>START</b> to connect a server (e.g. Playwright); the indicator turns
+            green and its tools appear. Toggle any individual tool to control whether the model may call it.
+            Use the sidebar menu on the <b>TERMINAL</b> tab to enable or disable a whole server for the
+            current session only.</p>
+        </div>
+
+        <div class="settings-tail">MCP STATE IS SHARED ACROSS SESSIONS & SCREENS</div>
       </div>
     </section>
 

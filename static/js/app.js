@@ -15,6 +15,8 @@ let busy = false;
 let linkOnline = false;
 const streamBuffers = {};           // messageId -> live text
 const thinkExpanded = new Set();    // messageIds whose reasoning is expanded (folded by default)
+const toolExpanded = new Set();     // toolblock keys the user has expanded (folded by default)
+let mcpState = { enabled: false, servers: [], config_json: "" };
 let stuck = true;                    // transcript pinned to bottom?
 let booted = false;
 
@@ -45,6 +47,7 @@ socket.on("voices", (d) => renderVoices(d));
 socket.on("tts_audio", (d) => onTtsAudio(d));
 socket.on("tts_clear", () => clearTts());
 socket.on("previews_done", () => { $("#btn-gen-previews").classList.remove("busy"); });
+socket.on("mcp_state", (d) => renderMcp(d));
 
 /* ============================================================
    BOOT SEQUENCE
@@ -211,6 +214,9 @@ function renderTranscript() {
 }
 
 function buildMessage(m) {
+  // Tool observations render as their own compacted block, not a chat bubble.
+  if (m.role === "tool") return buildToolResult(m);
+
   const wrap = document.createElement("div");
   wrap.className = "msg " + m.role + (m.error ? " error" : "");
   wrap.dataset.id = m.id;
@@ -245,6 +251,9 @@ function buildMessage(m) {
         : `◇ REASONED (hidden)`;
       wrap.appendChild(mk);
     }
+    // Tool calls the model requested this turn — folded away so they never
+    // interrupt the spoken reply; click to inspect the arguments.
+    if (m.tool_calls && m.tool_calls.length) wrap.appendChild(buildToolCalls(m));
     if (settings.show_generation_info && m.meta && !isStreaming) wrap.appendChild(buildGenInfo(m.meta));
   } else {
     if (m.images && m.images.length) wrap.appendChild(buildImages(m.images));
@@ -296,6 +305,56 @@ function buildThink(id, text, spinning) {
   body.textContent = text;
   box.appendChild(head); box.appendChild(body);
   return box;
+}
+
+/* ---------- MCP tool call / result blocks (compacted) ---------- */
+function buildToolBlock(key, cls, headHTML, bodyText) {
+  const box = document.createElement("div");
+  box.className = "toolblock " + cls + (toolExpanded.has(key) ? "" : " collapsed");
+  const head = document.createElement("div");
+  head.className = "toolblock-head";
+  head.innerHTML = headHTML + ` <span class="chev">▾</span>`;
+  head.addEventListener("click", () => {
+    box.classList.toggle("collapsed");
+    if (box.classList.contains("collapsed")) toolExpanded.delete(key);
+    else toolExpanded.add(key);
+  });
+  const body = document.createElement("div");
+  body.className = "toolblock-body";
+  body.textContent = bodyText;
+  box.appendChild(head); box.appendChild(body);
+  return box;
+}
+
+function buildToolCalls(m) {
+  const frag = document.createDocumentFragment();
+  m.tool_calls.forEach((tc, i) => {
+    let args = tc.arguments || "";
+    try { args = JSON.stringify(JSON.parse(args), null, 2); } catch {}
+    const head = `<span>⛭</span> <b>TOOL CALL</b> · <span class="tname">${escapeHtml(tc.name)}</span>`;
+    frag.appendChild(buildToolBlock(m.id + "::call" + i, "call", head, args || "(no arguments)"));
+  });
+  return frag;
+}
+
+function buildToolResult(m) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg tool";
+  wrap.dataset.id = m.id;
+  const running = m.status === "running";
+  const isErr = m.status === "error";
+  const cls = "result" + (isErr ? " err" : "");
+  const icon = running ? `<span class="tool-spinner"></span>` : (isErr ? `<span>⚠</span>` : `<span>◇</span>`);
+  const label = running ? "RUNNING" : (isErr ? "TOOL ERROR" : "TOOL RESULT");
+  const head = `${icon} <b>${label}</b> · <span class="tname">${escapeHtml(m.name || "")}</span>`;
+  const body = running ? "executing…" : (m.content || "(no content)");
+  wrap.appendChild(buildToolBlock(m.id, cls, head, body));
+  return wrap;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function buildGenInfo(meta) {
@@ -923,6 +982,175 @@ $("#btn-test-noise").addEventListener("click", () => {
   }
   addEventListener("resize", resize); resize(); tick();
 })();
+
+/* ============================================================
+   MCP TOOLS — Tools tab + per-session sidebar rail
+   ============================================================ */
+let mcpRailCollapsed = true;
+
+function renderMcp(d) {
+  mcpState = d || { enabled: false, servers: [], config_json: "" };
+
+  // master chip
+  const chip = $("#mcp-chip");
+  if (chip) {
+    chip.classList.remove("on", "off");
+    chip.classList.add(mcpState.enabled ? "on" : "off");
+    chip.querySelector("b").textContent = mcpState.enabled ? "ARMED" : "OFF";
+  }
+
+  // stored config JSON (don't clobber while the user is editing it)
+  const cfg = $("#mcp-config");
+  if (cfg && !isFocused(cfg)) cfg.value = mcpState.config_json || "";
+
+  renderMcpServers();
+  renderMcpRail();
+}
+
+function renderMcpServers() {
+  const box = $("#mcp-server-list");
+  if (!box) return;
+  box.innerHTML = "";
+  const servers = mcpState.servers || [];
+  if (!servers.length) {
+    box.innerHTML = '<div class="mcp-empty">No MCP servers configured. Add a ' +
+      '<code>mcpServers</code> block above (the Playwright example is pre-filled) and press ' +
+      '<b>SAVE SERVERS</b>.</div>';
+    return;
+  }
+  for (const s of servers) {
+    const running = s.status === "running";
+    const card = document.createElement("div");
+    card.className = "mcp-srv " + (running ? "run" : (s.status === "error" ? "err" :
+      (s.status === "starting" ? "starting" : "")));
+
+    const head = document.createElement("div");
+    head.className = "mcp-srv-head";
+    head.innerHTML = `
+      <div class="mcp-srv-status">
+        <i class="sdot"></i>
+        <div class="mcp-srv-name">
+          <b></b><code></code>
+        </div>
+      </div>
+      <div class="mcp-srv-detail"></div>
+      <div class="mcp-srv-actions"></div>`;
+    head.querySelector(".mcp-srv-name b").textContent = s.name;
+    head.querySelector(".mcp-srv-name code").textContent =
+      [s.command, ...(s.args || [])].join(" ");
+    head.querySelector(".mcp-srv-detail").textContent =
+      s.detail || s.status.toUpperCase();
+
+    const actions = head.querySelector(".mcp-srv-actions");
+    if (running || s.status === "starting") {
+      const stop = document.createElement("button");
+      stop.className = "btn mini danger";
+      stop.innerHTML = "<i>■</i> STOP";
+      stop.addEventListener("click", () => socket.emit("mcp_stop_server", { name: s.name }));
+      actions.appendChild(stop);
+    } else {
+      const start = document.createElement("button");
+      start.className = "btn mini";
+      start.innerHTML = "<i>▶</i> START";
+      start.addEventListener("click", () => {
+        start.innerHTML = "<i>◷</i> STARTING…"; start.disabled = true;
+        socket.emit("mcp_start_server", { name: s.name });
+      });
+      actions.appendChild(start);
+    }
+    card.appendChild(head);
+
+    // tool list (only meaningful once the server is connected)
+    const tools = document.createElement("div");
+    tools.className = "mcp-tools";
+    if (running && (s.tools || []).length) {
+      for (const t of s.tools) {
+        const row = document.createElement("div");
+        row.className = "mcp-tool" + (t.enabled ? "" : " off");
+        const main = document.createElement("div");
+        main.className = "mcp-tool-main";
+        main.innerHTML = `<div class="mcp-tool-name"></div><div class="mcp-tool-desc"></div>`;
+        main.querySelector(".mcp-tool-name").textContent = t.name;
+        main.querySelector(".mcp-tool-desc").textContent = t.description || "";
+        const sw = document.createElement("button");
+        sw.className = "switch" + (t.enabled ? " on" : "");
+        sw.setAttribute("role", "switch");
+        sw.title = "Allow the model to call this tool";
+        sw.addEventListener("click", () => {
+          const val = !sw.classList.contains("on");
+          sw.classList.toggle("on", val);
+          row.classList.toggle("off", !val);
+          socket.emit("mcp_toggle_tool", { key: t.key, enabled: val });
+        });
+        row.appendChild(main); row.appendChild(sw);
+        tools.appendChild(row);
+      }
+    } else if (running) {
+      tools.innerHTML = '<div class="mcp-tool-none">Server connected but exposes no tools.</div>';
+    } else {
+      tools.innerHTML = '<div class="mcp-tool-none">Start this server to discover its tools.</div>';
+    }
+    card.appendChild(tools);
+    box.appendChild(card);
+  }
+}
+
+function renderMcpRail() {
+  const rail = $("#mcp-rail");
+  if (!rail) return;
+  rail.classList.toggle("on", !!mcpState.enabled);
+  rail.classList.toggle("collapsed", mcpRailCollapsed);
+  const running = (mcpState.servers || []).filter((s) => s.status === "running").length;
+  $("#mcp-rail-state").textContent = !mcpState.enabled ? "OFF" : (running ? `${running} LIVE` : "ARMED");
+
+  const list = $("#mcp-rail-list");
+  list.innerHTML = "";
+  const servers = mcpState.servers || [];
+  if (!servers.length) {
+    list.innerHTML = '<div class="mcp-rail-empty">No MCP servers. Configure them in the Tools tab.</div>';
+    return;
+  }
+  for (const s of servers) {
+    const active = s.session_active !== false;
+    const row = document.createElement("div");
+    const stateCls = s.status === "running" ? "run" : (s.status === "error" ? "err" :
+      (s.status === "starting" ? "starting" : ""));
+    row.className = "mcp-rail-row " + stateCls + (active ? "" : " off-server");
+    row.innerHTML = `<i class="rdot"></i><span class="rname"></span>` +
+      `<span class="rcount">${s.status === "running" ? (s.tools || []).length + "t" : ""}</span>`;
+    row.querySelector(".rname").textContent = s.name;
+    const sw = document.createElement("button");
+    sw.className = "switch" + (active ? " on" : "");
+    sw.setAttribute("role", "switch");
+    sw.title = "Use this server in the current session";
+    sw.addEventListener("click", () => {
+      const val = !sw.classList.contains("on");
+      sw.classList.toggle("on", val);
+      row.classList.toggle("off-server", !val);
+      socket.emit("mcp_session_toggle", { server: s.name, enabled: val });
+    });
+    row.appendChild(sw);
+    list.appendChild(row);
+  }
+}
+
+/* ---- Tools tab + rail wiring ---- */
+$("#mcp-rail-head").addEventListener("click", () => {
+  mcpRailCollapsed = !mcpRailCollapsed;
+  $("#mcp-rail").classList.toggle("collapsed", mcpRailCollapsed);
+});
+$("#mcp-rail-config").addEventListener("click", () => switchView("tools"));
+$("#btn-mcp-refresh").addEventListener("click", () => socket.emit("mcp_refresh"));
+$("#btn-mcp-save").addEventListener("click", () => {
+  const cfg = $("#mcp-config");
+  socket.emit("mcp_save_servers", { json: cfg.value });
+});
+$("#mcp-config").addEventListener("input", () => {
+  const el = $("#mcp-config"), st = $("#mcp-json-status");
+  if (!el.value.trim()) { st.textContent = "empty"; st.className = "json-status"; return; }
+  try { JSON.parse(el.value); st.textContent = "✓ valid JSON"; st.className = "json-status ok"; }
+  catch (e) { st.textContent = "✕ invalid JSON"; st.className = "json-status bad"; }
+});
 
 /* ============================================================
    TOAST

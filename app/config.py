@@ -5,11 +5,32 @@ Everything here is the *factory default*. Live values are stored in
 data/state.json and may be edited from the Settings panel at runtime.
 """
 
+import json
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
+
+# Bundled example MCP configuration (LM Studio-style ``mcpServers`` JSON). Used
+# as the factory default so a fresh install already lists the Playwright server.
+TOOLS_FILE = os.path.join(BASE_DIR, "tools.json")
+
+
+def _load_default_mcp_servers() -> dict:
+    try:
+        with open(TOOLS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        servers = data.get("mcpServers")
+        if isinstance(servers, dict):
+            return servers
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback to the canonical Playwright example if tools.json is unavailable.
+    return {"playwright": {"command": "npx", "args": ["@playwright/mcp@latest"]}}
+
+
+DEFAULT_MCP_SERVERS = _load_default_mcp_servers()
 
 # Piper TTS voice models live here (.onnx + .onnx.json), and the auto-generated
 # previews for each voice land in the previews/ subfolder.
@@ -119,6 +140,19 @@ DEFAULT_SETTINGS = {
     # ---- Network (LAN sync) ----
     "lan_visible": True,            # accept connections from the LAN
     "access_token": "",            # optional shared secret (blank = none)
+
+    # ---- MCP tools (Model Context Protocol) ----
+    # The whole feature is opt-in: with mcp_enabled False no tools are ever sent
+    # and generation is a single plain turn, exactly as before. Turn it on (Tools
+    # tab) to let the model call tools from running MCP servers.
+    "mcp_enabled": False,
+    # LM Studio-style stored config: { name: {command, args, env?} }. Saved as a
+    # JSON document from the Tools tab; servers are spawned on demand.
+    "mcp_servers": dict(DEFAULT_MCP_SERVERS),
+    # Per-tool master enable, keyed "server::tool". Absent key defaults to True.
+    "mcp_tool_enabled": {},
+    # Safety cap on the think→call→observe loop within a single user turn.
+    "mcp_max_iterations": 8,
 }
 
 # Fields that, when changed, should re-test the endpoint link.

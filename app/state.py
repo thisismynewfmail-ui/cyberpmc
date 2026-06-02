@@ -89,6 +89,11 @@ class StateStore:
         with self._lock:
             # Ignore the masking helper if echoed back.
             patch = {k: v for k, v in patch.items() if k != "api_key_set"}
+            # The MCP server map is REPLACED wholesale (not deep-merged) so that
+            # removing a server from the JSON actually deletes it instead of the
+            # stale entry lingering. Everything else deep-merges as usual.
+            if "mcp_servers" in patch:
+                self._state["settings"]["mcp_servers"] = copy.deepcopy(patch.pop("mcp_servers"))
             # Allow clearing the key only with an explicit empty string when the
             # caller actually sent the field; otherwise leave it untouched.
             _deep_merge(self._state["settings"], patch)
@@ -105,6 +110,10 @@ class StateStore:
             "created": _now(),
             "updated": _now(),
             "messages": [],
+            # Per-session MCP server toggles, keyed by server name. An absent key
+            # means "active" so newly started servers are usable everywhere by
+            # default; the sidebar menu flips these per session.
+            "mcp_active": {},
         }
         self._state["active_id"] = sid
         return sid
@@ -168,6 +177,7 @@ class StateStore:
                 "created": _now(),
                 "updated": _now(),
                 "messages": copy.deepcopy(s["messages"]),
+                "mcp_active": copy.deepcopy(s.get("mcp_active", {})),
             }
             self._save()
             return new_id
@@ -191,6 +201,22 @@ class StateStore:
                 return False
             s["messages"] = []
             s["updated"] = _now()
+            self._save()
+            return True
+
+    # -- per-session MCP toggles ------------------------------------------
+    def session_mcp_active(self, sid: str | None) -> dict:
+        """The server→bool map for a session (empty if none / unknown)."""
+        with self._lock:
+            s = self._state["sessions"].get(sid)
+            return copy.deepcopy(s.get("mcp_active", {})) if s else {}
+
+    def set_session_mcp(self, sid: str, server: str, enabled: bool) -> bool:
+        with self._lock:
+            s = self._state["sessions"].get(sid)
+            if not s:
+                return False
+            s.setdefault("mcp_active", {})[server] = bool(enabled)
             self._save()
             return True
 

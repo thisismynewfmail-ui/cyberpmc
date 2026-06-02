@@ -10,12 +10,14 @@ cognition core, many screens.
 omnibrain/
 ├── python.py            ← launcher  (python python.py)
 ├── requirements.txt
+├── tools.json           example MCP server config (Playwright) — the factory default
 ├── app/
-│   ├── config.py        factory defaults (endpoint, samplers, context, speech…)
-│   ├── llm.py           engine: tokens, context cropping, think handling, streaming
+│   ├── config.py        factory defaults (endpoint, samplers, context, speech, MCP…)
+│   ├── llm.py           engine: tokens, context cropping, think handling, tool calls, streaming
+│   ├── mcp.py           MCP client: spawn servers, JSON-RPC, tools/list + tools/call
 │   ├── tts.py           speech: Piper TTS, per-block synth pipeline, voice cache
 │   ├── state.py         thread-safe persistent store (data/state.json)
-│   └── server.py        Flask + Socket.IO sync, access gating, streaming relay
+│   └── server.py        Flask + Socket.IO sync, access gating, streaming relay, tool loop
 ├── static/
 │   ├── css/style.css    the theme
 │   └── js/app.js        client: sync, streaming render, animated core, voice
@@ -84,6 +86,44 @@ Set an optional **ACCESS TOKEN** to require a shared secret to connect.
   Jinja template* to render a template locally and post raw to
   `/v1/completions`.
 
+## MCP tools
+
+The **TOOLS** tab wires the cognition core to **MCP (Model Context Protocol)**
+servers, so the model can call real tools mid-reply — think, run a tool such as
+Playwright's `browser_snapshot`, read the result, and keep going. The MCP plumbing
+lives in the chat itself; the tab is only where you set it up.
+
+- **Adding servers works exactly like LM Studio**: the *MCP SERVERS* card holds a
+  stored `mcpServers` JSON document (the bundled `tools.json`, with Playwright,
+  is the factory default). Paste/edit it and press **SAVE SERVERS**.
+
+      { "mcpServers": { "playwright": { "command": "npx", "args": ["@playwright/mcp@latest"] } } }
+
+- **Start on demand**: each configured server has a **START** button and a live
+  status indicator (grey → amber *starting* → green *connected · N tools*).
+  Nothing spawns on boot; you start the Playwright server when you want it. Once
+  connected its tools are discovered and listed.
+- **Per-tool gating**: every discovered tool has its own switch controlling
+  whether the model is allowed to call it.
+- **Per-session server toggles**: the **MCP TOOLS** menu in the TERMINAL sidebar
+  (above **NEW / STOP**) lists every installed server with a switch, so you can
+  enable or disable a whole server for the current session's context without
+  touching the global config.
+- **Master switch**: *ENABLE MCP TOOLS* arms the feature. With it off, no tools
+  are ever advertised and a turn is a single plain reply — identical to a build
+  without MCP.
+
+How a tool turn behaves: the model streams normally; when it requests a call the
+core executes it through the owning MCP server, writes the observation back as a
+`tool` message, and lets the model continue — repeating up to `mcp_max_iterations`
+times (default `8`) before the final answer. **Thinking** is handled the same way
+on every hop (the `<think>` trace can precede each call). Tool calls and results
+render as **compacted blocks** that fold away by default and **never interrupt
+spoken output** — the TTS pipeline runs continuously across the whole loop.
+Tool calls and results are ordinary messages, so they count toward the context
+meter and crop cleanly at message boundaries (a tool result is never separated
+from the call that produced it).
+
 ## Image input (vision)
 
 The composer has a small **image icon above the send button**. Click it (or
@@ -150,7 +190,9 @@ OMNIBRAIN_PORT=5005 python tests/integration_test.py
 ```
 
 The suite covers state sync, streaming, think-stripping, verbatim sampler
-pass-through, context cropping, session ops, and on-disk persistence.
+pass-through, context cropping, session ops, on-disk persistence, and the full
+MCP tool loop (a bundled `tests/mock_mcp_server.py` is started over stdio,
+discovered, and exercised end-to-end: think → call → observe → final answer).
 
 ## Notes
 
