@@ -64,6 +64,7 @@ DEFAULT_SAMPLING = {
     "xtc_probability": 0.3,
     "dry_multiplier": 0.9,
     "frequency_penalty": 0.05,
+    "presence_penalty": 1.5,
     "repetition_penalty_range": 1152,
     "dynamic_temperature": True,
     "temperature_last": False,
