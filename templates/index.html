@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>OMNIBRAIN // COGNITION TERMINAL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@300;400;500;600;700;800&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="state-boot">
+
+<!-- ===== atmosphere layers ===== -->
+<canvas id="net-canvas" aria-hidden="true"></canvas>
+<div class="fx-scanlines" aria-hidden="true"></div>
+<div class="fx-vignette" aria-hidden="true"></div>
+<div class="fx-grain" aria-hidden="true"></div>
+
+<!-- ===== boot splash ===== -->
+<div id="boot" aria-hidden="true">
+  <div class="boot-inner">
+    <div class="boot-glyph">
+      <svg viewBox="0 0 120 120"><use href="#core-symbol"></use></svg>
+    </div>
+    <div class="boot-title">OMNIBRAIN</div>
+    <div class="boot-sub" id="boot-line">INITIALIZING COGNITION LINK</div>
+    <div class="boot-bar"><span></span></div>
+  </div>
+</div>
+
+<!-- reusable cognition-core symbol -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="core-symbol" viewBox="0 0 120 120">
+    <polygon points="60,8 104,34 104,86 60,112 16,86 16,34" fill="none"
+             stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+  </symbol>
+</svg>
+
+<div id="app" class="app-hidden">
+
+  <!-- =========================== STATUS BAR =========================== -->
+  <header class="statusbar">
+    <div class="sb-left">
+      <div class="glyph-rail" aria-hidden="true">
+        <span class="glyph">▤</span><span class="glyph">⬡</span><span class="glyph">⌖</span>
+        <span class="glyph">◷</span><span class="glyph">⬗</span>
+      </div>
+      <div class="brand">
+        <div class="brand-name">OMNIBRAIN</div>
+        <div class="brand-sub">COGNITION&nbsp;TERMINAL</div>
+      </div>
+    </div>
+
+    <div class="sb-right">
+      <div class="stat" id="stat-link">
+        <span class="stat-key">LINK</span>
+        <span class="stat-val"><i class="dot"></i><b id="link-text">PROBING</b></span>
+      </div>
+      <div class="stat">
+        <span class="stat-key">MODEL</span>
+        <span class="stat-val" id="stat-model">—</span>
+      </div>
+      <div class="stat">
+        <span class="stat-key">CONTEXT</span>
+        <span class="stat-val" id="stat-context">0%</span>
+      </div>
+      <div class="stat">
+        <span class="stat-key">SCREENS</span>
+        <span class="stat-val" id="stat-screens">1</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- =========================== TAB STRIP =========================== -->
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="terminal"><i>▷</i> TERMINAL</button>
+    <button class="tab" data-view="sessions"><i>▤</i> SESSIONS</button>
+    <button class="tab" data-view="settings"><i>⚙</i> SETTINGS</button>
+    <button class="tab" data-view="network"><i>⬡</i> NETWORK</button>
+    <span class="tab-underline" id="tab-underline"></span>
+  </nav>
+
+  <!-- =========================== VIEWS =========================== -->
+  <main class="stage">
+
+    <!-- --------- TERMINAL --------- -->
+    <section class="view view-terminal active" data-view="terminal">
+      <aside class="core-column panel">
+        <div class="bracket tl"></div><div class="bracket tr"></div>
+        <div class="bracket bl"></div><div class="bracket br"></div>
+
+        <!-- animated cognition core -->
+        <div class="core-stage" id="core" data-state="idle">
+          <svg viewBox="0 0 120 120" class="core-svg">
+            <polygon class="c-ring-out" points="60,6 106,33 106,87 60,114 14,87 14,33"/>
+            <circle class="c-ring-mid" cx="60" cy="60" r="40"/>
+            <circle class="c-ring-dash" cx="60" cy="60" r="31"/>
+            <g class="c-eye">
+              <circle class="c-lens" cx="60" cy="60" r="22"/>
+              <circle class="c-iris" cx="60" cy="60" r="13"/>
+              <circle class="c-pupil" cx="60" cy="60" r="5.5"/>
+              <circle class="c-glint" cx="55" cy="55" r="2"/>
+            </g>
+            <g class="c-sat">
+              <circle cx="60" cy="20" r="3.4"/>
+              <circle cx="96" cy="42" r="3.4"/>
+              <circle cx="96" cy="78" r="3.4"/>
+              <circle cx="60" cy="100" r="3.4"/>
+              <circle cx="24" cy="78" r="3.4"/>
+              <circle cx="24" cy="42" r="3.4"/>
+            </g>
+            <line class="c-scan" x1="38" y1="60" x2="82" y2="60"/>
+            <g class="c-ticks">
+              <line x1="60" y1="2" x2="60" y2="10"/>
+              <line x1="118" y1="60" x2="110" y2="60"/>
+              <line x1="60" y1="118" x2="60" y2="110"/>
+              <line x1="2" y1="60" x2="10" y2="60"/>
+            </g>
+          </svg>
+          <div class="core-blink"></div>
+        </div>
+
+        <div class="core-label" id="core-label">STANDBY</div>
+
+        <ul class="vitals">
+          <li><span>SESSION</span><b id="vital-session">—</b></li>
+          <li><span>TURNS</span><b id="vital-turns">0</b></li>
+          <li><span>TOKENS</span><b id="vital-tokens">0</b></li>
+          <li><span>HORIZON</span><b id="vital-horizon">0</b></li>
+        </ul>
+
+        <div class="core-actions">
+          <button class="btn ghost" id="btn-new-quick"><i>＋</i> NEW</button>
+          <button class="btn danger" id="btn-stop" disabled><i>■</i> STOP</button>
+        </div>
+      </aside>
+
+      <div class="chat-panel panel">
+        <div class="bracket tl"></div><div class="bracket tr"></div>
+        <div class="bracket bl"></div><div class="bracket br"></div>
+
+        <div class="chat-head">
+          <div class="ch-title">
+            <i class="ch-pip"></i>
+            <span id="chat-session-name">SESSION</span>
+          </div>
+          <div class="ctx-meter" title="Context window fullness">
+            <div class="ctx-track"><div class="ctx-fill" id="ctx-fill"></div>
+              <span class="ctx-threshold" id="ctx-threshold"></span></div>
+            <span class="ctx-readout" id="ctx-readout">0 / 8196</span>
+          </div>
+        </div>
+
+        <div class="transcript" id="transcript">
+          <div class="empty-state" id="empty-state">
+            <svg viewBox="0 0 120 120"><use href="#core-symbol"></use></svg>
+            <p>COGNITION LINK STANDING BY</p>
+            <span>Transmit a message to begin.</span>
+          </div>
+        </div>
+
+        <button class="jump-latest" id="jump-latest">↓ LATEST</button>
+
+        <div class="composer">
+          <div class="attach-tray" id="attach-tray" hidden></div>
+          <div class="composer-frame">
+            <span class="prompt-mark" id="prompt-mark">USER&nbsp;▸</span>
+            <textarea id="input" rows="1" placeholder="Transmit to cognition core…"
+                      autocomplete="off"></textarea>
+            <div class="composer-btns">
+              <button class="attach-btn" id="attach-btn" title="Attach image">
+                <svg class="attach-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3" y="5" width="18" height="14" rx="1.5" fill="none"
+                        stroke="currentColor" stroke-width="1.7"/>
+                  <circle cx="8.5" cy="9.5" r="1.8" fill="currentColor"/>
+                  <path d="M4 17l5-5 4 4 3-3 4 4" fill="none" stroke="currentColor"
+                        stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button class="send-btn" id="send-btn" title="Send (Enter)">
+                <span class="send-icon">➤</span>
+              </button>
+            </div>
+          </div>
+          <input type="file" id="image-input" accept="image/*" multiple hidden>
+          <div class="composer-hint">
+            <span><b>ENTER</b> transmit &nbsp;·&nbsp; <b>SHIFT+ENTER</b> newline</span>
+            <span id="busy-flag" class="busy-flag">◷ CORE BUSY</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- --------- SESSIONS --------- -->
+    <section class="view view-sessions" data-view="sessions">
+      <div class="panel sessions-panel">
+        <div class="bracket tl"></div><div class="bracket tr"></div>
+        <div class="bracket bl"></div><div class="bracket br"></div>
+        <div class="section-head">
+          <h2>CHAT SESSIONS</h2>
+          <div class="section-actions">
+            <button class="btn" id="btn-new-session"><i>＋</i> NEW SESSION</button>
+            <button class="btn ghost" id="btn-clear-session"><i>⌫</i> CLEAR ACTIVE</button>
+          </div>
+        </div>
+        <p class="section-note">Sessions are shared live across every connected screen. The active
+          session is highlighted; selecting one switches every screen to it.</p>
+        <div class="session-list" id="session-list"></div>
+      </div>
+    </section>
+
+    <!-- --------- SPEECH (redone settings tab) --------- -->
+    <section class="view view-settings" data-view="settings">
+      <div class="settings-scroll" id="settings-scroll">
+
+        <!-- SPEECH OUTPUT -->
+        <div class="panel cfg-card speech-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>♬ SPEECH OUTPUT</h3>
+            <span class="speech-chip" id="speech-chip"><i class="dot"></i><b>MUTED</b></span></div>
+
+          <div class="field toggle-field span-all hero-toggle">
+            <span>ENABLE VOICE FEEDBACK <em>(spoken output as the core replies)</em></span>
+            <button class="switch lg" data-toggle="voice_enabled" role="switch"></button>
+          </div>
+
+          <div class="field span-all">
+            <span>VOICE ENGINE</span>
+            <div class="engine-pick" id="engine-pick">
+              <button class="engine-opt" data-engine="noise">
+                <i>♒</i><b>NOISE SYNTH</b><em>animal-crossing blips · zero latency</em></button>
+              <button class="engine-opt" data-engine="piper">
+                <i>♬</i><b>PIPER TTS</b><em>neural voice · per-block streaming</em></button>
+            </div>
+          </div>
+
+          <div class="cfg-grid">
+            <label class="field span2">
+              <span>OUTPUT VOLUME — <b id="vol-val">85</b>%</span>
+              <input type="range" min="0" max="100" step="1" id="vol-range">
+            </label>
+            <div class="field toggle-field span2">
+              <span>SKIP REASONING <em>(never speak &lt;think&gt; aloud)</em></span>
+              <button class="switch" data-toggle="tts_skip_think" role="switch"></button>
+            </div>
+          </div>
+          <p class="cfg-foot">Voice output is shared state — every screen with audio enabled speaks in
+            sync. This master toggle <b>only</b> starts and stops playback; switching engine or voice
+            cleanly stops audio and releases any loaded model.</p>
+        </div>
+
+        <!-- NOISE SYNTH -->
+        <div class="panel cfg-card engine-card" id="noise-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ NOISE SYNTH</h3>
+            <button class="btn mini ghost" id="btn-test-noise"><i>▶</i> TEST</button></div>
+          <div class="cfg-grid">
+            <label class="field">
+              <span>WAVEFORM</span>
+              <select data-setting="noise_waveform">
+                <option value="square">square</option>
+                <option value="sine">sine</option>
+                <option value="triangle">triangle</option>
+                <option value="sawtooth">sawtooth</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>BLIP RATE — every <b id="nspeed-val">2</b> chars</span>
+              <input type="range" min="1" max="8" step="1" id="nspeed-range">
+            </label>
+            <label class="field">
+              <span>BASE PITCH — <b id="npitch-val">320</b> Hz</span>
+              <input type="range" min="120" max="720" step="5" id="npitch-range">
+            </label>
+            <label class="field">
+              <span>PITCH JITTER — ± <b id="nvar-val">90</b> Hz</span>
+              <input type="range" min="0" max="300" step="5" id="nvar-range">
+            </label>
+          </div>
+          <p class="cfg-foot">A short blip fires as characters stream in — the classic "animal crossing"
+            chatter. Runs entirely in the browser, so it has no synthesis delay.</p>
+        </div>
+
+        <!-- PIPER VOICES -->
+        <div class="panel cfg-card engine-card" id="piper-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ PIPER VOICES</h3>
+            <button class="btn mini" id="btn-gen-previews"><i>⟲</i> GENERATE PREVIEWS</button></div>
+          <div class="piper-status" id="piper-status">checking for Piper TTS…</div>
+          <div class="cfg-grid">
+            <label class="field span2">
+              <span>SPEAKING RATE — <b id="prate-val">1.00</b>× length <em>(lower = faster)</em></span>
+              <input type="range" min="0.5" max="1.6" step="0.05" id="prate-range">
+            </label>
+          </div>
+          <div class="voice-list" id="voice-list"></div>
+          <p class="cfg-foot">Install voices by dropping <code>.onnx</code> + <code>.onnx.json</code> files into the
+            <code>voices/</code> folder, then press <b>GENERATE PREVIEWS</b> — every voice without a sample
+            yet gets one rendered next to it. Blocks are synthesised as the reply streams for the fastest
+            possible first word.</p>
+        </div>
+
+        <div class="settings-divider"><span>◈ COGNITION ENGINE</span></div>
+
+        <!-- LINK -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ LINK</h3>
+            <span class="link-chip" id="link-chip"><i class="dot"></i><b>—</b></span></div>
+          <div class="cfg-grid">
+            <label class="field span2">
+              <span>ENDPOINT (OpenAI-compatible base URL)</span>
+              <input type="text" data-setting="endpoint" placeholder="http://10.0.0.113:5000/v1">
+            </label>
+            <label class="field">
+              <span>API KEY <em id="apikey-state"></em></span>
+              <input type="password" data-setting="api_key" placeholder="(blank)">
+            </label>
+            <label class="field">
+              <span>MODEL NAME</span>
+              <input type="text" data-setting="model" placeholder="Omnibrain-UE">
+            </label>
+            <label class="field">
+              <span>USERNAME (sent as the chat user)</span>
+              <input type="text" data-setting="username" placeholder="User">
+            </label>
+            <div class="field self-end">
+              <button class="btn wide" id="btn-test-link"><i>⟲</i> TEST CONNECTION</button>
+            </div>
+          </div>
+          <div class="model-pick" id="model-pick" hidden>
+            <span>Detected models:</span><div id="model-pick-list"></div>
+          </div>
+        </div>
+
+        <!-- CONTEXT -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ CONTEXT WINDOW</h3></div>
+          <div class="cfg-grid">
+            <label class="field">
+              <span>CONTEXT SIZE (tokens)</span>
+              <input type="number" min="256" step="1" data-setting="context_size">
+            </label>
+            <label class="field">
+              <span>TOKEN RATIO (chars ÷ token)</span>
+              <input type="number" min="1" step="0.1" data-setting="chars_per_token">
+            </label>
+            <label class="field span2">
+              <span>CROP THRESHOLD — <b id="thr-val">95</b>% fullness</span>
+              <input type="range" min="50" max="100" step="1" data-setting="context_threshold" id="thr-range">
+            </label>
+          </div>
+          <p class="cfg-foot">When fullness crosses the threshold the <b>oldest whole messages</b>
+            fall out of context, one at a time. The system prompt is always pinned and the most
+            recent message is always kept — conversations continue indefinitely with a clean cut.</p>
+        </div>
+
+        <!-- SYSTEM PROMPT -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ SYSTEM PROMPT</h3></div>
+          <textarea class="big-text" data-setting="system_message" rows="5"
+                    placeholder="Define the cognition core's behaviour…"></textarea>
+          <p class="cfg-foot">Injected as the <b>system</b> role and applied by the chat template.
+            Never dropped by context cropping.</p>
+        </div>
+
+        <!-- GENERATION -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ GENERATION</h3></div>
+          <div class="cfg-grid">
+            <label class="field">
+              <span>MAX TOKENS (0 = endpoint default)</span>
+              <input type="number" min="0" step="1" data-setting="max_tokens">
+            </label>
+            <div class="field toggle-field">
+              <span>STREAM RESPONSE</span>
+              <button class="switch" data-toggle="stream" role="switch"></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SAMPLING -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ SAMPLING</h3>
+            <button class="btn mini" id="btn-load-samplers"><i>⤓</i> LOAD DEFAULTS</button></div>
+          <div class="field toggle-field span-all">
+            <span>USE ENDPOINT / MODEL SAMPLER DEFAULTS <em>(omit all parameters below)</em></span>
+            <button class="switch" data-toggle="use_endpoint_sampler_defaults" role="switch"></button>
+          </div>
+          <div class="cfg-grid sampler-grid" id="sampler-grid">
+            <label class="field"><span>temperature</span>
+              <input type="number" step="0.01" data-sampler="temperature"></label>
+            <label class="field"><span>top_p</span>
+              <input type="number" step="0.01" data-sampler="top_p"></label>
+            <label class="field"><span>top_k</span>
+              <input type="number" step="1" data-sampler="top_k"></label>
+            <label class="field"><span>min_p</span>
+              <input type="number" step="0.01" data-sampler="min_p"></label>
+            <label class="field"><span>dynatemp_low</span>
+              <input type="number" step="0.01" data-sampler="dynatemp_low"></label>
+            <label class="field"><span>dynatemp_high</span>
+              <input type="number" step="0.01" data-sampler="dynatemp_high"></label>
+            <label class="field"><span>dynatemp_exponent</span>
+              <input type="number" step="0.01" data-sampler="dynatemp_exponent"></label>
+            <label class="field"><span>xtc_probability</span>
+              <input type="number" step="0.01" data-sampler="xtc_probability"></label>
+            <label class="field"><span>dry_multiplier</span>
+              <input type="number" step="0.01" data-sampler="dry_multiplier"></label>
+            <label class="field"><span>frequency_penalty</span>
+              <input type="number" step="0.01" data-sampler="frequency_penalty"></label>
+            <label class="field"><span>repetition_penalty_range</span>
+              <input type="number" step="1" data-sampler="repetition_penalty_range"></label>
+            <div class="field toggle-field"><span>dynamic_temperature</span>
+              <button class="switch" data-sampler-toggle="dynamic_temperature" role="switch"></button></div>
+            <div class="field toggle-field"><span>temperature_last</span>
+              <button class="switch" data-sampler-toggle="temperature_last" role="switch"></button></div>
+          </div>
+          <label class="field span-all">
+            <span>EXTRA PARAMETERS — advanced JSON, keys passed verbatim</span>
+            <textarea class="mono-text" data-setting="extra_params_json" rows="3"
+                      placeholder='{ "presence_penalty": 0.0 }'></textarea>
+            <em class="json-status" id="extra-json-status"></em>
+          </label>
+        </div>
+
+        <!-- REASONING -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ REASONING / THINKING MODELS</h3></div>
+          <div class="cfg-grid">
+            <div class="field toggle-field">
+              <span>ENABLE THINKING <em>(adds directive when off)</em></span>
+              <button class="switch" data-toggle="enable_thinking" role="switch"></button>
+            </div>
+            <div class="field toggle-field">
+              <span>SHOW THINKING <em>(reveal reasoning block)</em></span>
+              <button class="switch" data-toggle="show_thinking" role="switch"></button>
+            </div>
+            <label class="field"><span>OPEN TAG</span>
+              <input type="text" data-setting="think_open_tag" placeholder="&lt;think&gt;"></label>
+            <label class="field"><span>CLOSE TAG</span>
+              <input type="text" data-setting="think_close_tag" placeholder="&lt;/think&gt;"></label>
+            <label class="field"><span>THINKING-OFF DIRECTIVE</span>
+              <input type="text" data-setting="think_off_directive" placeholder="/no_think"></label>
+            <label class="field"><span>THINKING-ON DIRECTIVE</span>
+              <input type="text" data-setting="think_on_directive" placeholder="(blank)"></label>
+          </div>
+          <p class="cfg-foot">Reasoning inside the think tags is stripped from history after every turn,
+            so past thinking is never replayed into context. With <b>Show Thinking</b> off, the block is
+            hidden and the message reads normally — a small ◇ marker still flags that reasoning occurred.</p>
+        </div>
+
+        <!-- DISPLAY -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ DISPLAY</h3></div>
+          <div class="field toggle-field span-all">
+            <span>SHOW GENERATION INFO <em>(tokens, speed, finish reason — under each reply)</em></span>
+            <button class="switch" data-toggle="show_generation_info" role="switch"></button>
+          </div>
+        </div>
+
+        <!-- FORMAT -->
+        <div class="panel cfg-card">
+          <div class="bracket tl"></div><div class="bracket tr"></div>
+          <div class="bracket bl"></div><div class="bracket br"></div>
+          <div class="cfg-head"><h3>◈ PROMPT FORMAT</h3></div>
+          <div class="field toggle-field span-all">
+            <span>USE CUSTOM JINJA TEMPLATE <em>(raw /v1/completions instead of /chat/completions)</em></span>
+            <button class="switch" data-toggle="use_custom_template" role="switch"></button>
+          </div>
+          <label class="field span-all">
+            <span>CHAT TEMPLATE (Jinja2 — receives <code>system_message</code>, <code>messages</code>, <code>add_generation_prompt</code>)</span>
+            <textarea class="mono-text" data-setting="chat_template" rows="6"></textarea>
+          </label>
+          <p class="cfg-foot">Default mode sends the <b>messages</b> array to <code>/v1/chat/completions</code>
+            and lets the endpoint apply its own template — the correct path for most servers.</p>
+        </div>
+
+        <div class="settings-tail">CONFIGURATION PERSISTS ACROSS SESSIONS & SCREENS</div>
+      </div>
+    </section>
+
+    <!-- --------- NETWORK --------- -->
+    <section class="view view-network" data-view="network">
+      <div class="panel net-panel">
+        <div class="bracket tl"></div><div class="bracket tr"></div>
+        <div class="bracket bl"></div><div class="bracket br"></div>
+        <div class="section-head"><h2>NETWORK</h2></div>
+        <p class="section-note">This terminal runs one shared cognition state. Every monitor or PC that
+          opens it mirrors the same chat and settings in real time.</p>
+
+        <div class="net-grid">
+          <div class="net-tile big">
+            <div class="net-tile-head"><span>LAN VISIBILITY</span>
+              <button class="switch lg" data-toggle="lan_visible" role="switch"></button></div>
+            <p>When enabled, other machines on the local network can reach this terminal at
+              <code id="net-url">http://&lt;this-ip&gt;:5005</code>. When disabled, only this
+              machine (localhost) is served and remote screens are disconnected.</p>
+          </div>
+
+          <label class="net-tile field">
+            <span>ACCESS TOKEN <em>(optional shared secret)</em></span>
+            <input type="text" data-setting="access_token" placeholder="(blank — no token required)">
+            <p>If set, every screen must supply this token to connect.</p>
+          </label>
+
+          <div class="net-tile screens-tile">
+            <div class="net-tile-head"><span>CONNECTED SCREENS</span></div>
+            <div class="screen-count"><b id="net-screens">1</b><i>mirrored</i></div>
+            <div class="node-cluster" id="node-cluster"></div>
+          </div>
+
+          <div class="net-tile sync-tile">
+            <div class="net-tile-head"><span>SYNC STATE</span></div>
+            <ul class="sync-list">
+              <li><i class="ok"></i> Chat transcript</li>
+              <li><i class="ok"></i> Active session</li>
+              <li><i class="ok"></i> Settings &amp; samplers</li>
+              <li><i class="ok"></i> System prompt</li>
+            </ul>
+            <div class="sync-pulse"><span></span><span></span><span></span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="toast" class="toast"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
