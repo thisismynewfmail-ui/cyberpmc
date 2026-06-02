@@ -7,7 +7,7 @@ results = []
 
 sio = socketio.Client()
 state = {"settings": None, "session": None, "sessions": None, "link": None,
-         "busy": [], "tokens": [], "syncs": 0, "voices": None}
+         "busy": [], "tokens": [], "syncs": 0, "voices": None, "mcp": None}
 
 @sio.on("settings")
 def _s(d): state["settings"] = d
@@ -23,6 +23,8 @@ def _b(d): state["busy"].append(d["busy"])
 def _t(d): state["tokens"].append(d["delta"])
 @sio.on("voices")
 def _v(d): state["voices"] = d
+@sio.on("mcp_state")
+def _m(d): state["mcp"] = d
 
 sio.connect(URL, wait_timeout=10)
 time.sleep(0.6)
@@ -131,6 +133,64 @@ results.append(("voices reflects selection", state["voices"].get("selected") == 
 # back to defaults so a re-run starts clean and audio stays off
 sio.emit("update_settings", {"tts_engine": "noise", "voice_enabled": False, "piper_voice": ""})
 time.sleep(0.3)
+
+# 5c) MCP tools — discover, start, and run the full think→call→observe loop
+results.append(("mcp snapshot on connect", state["mcp"] is not None))
+results.append(("mcp default disabled", state["mcp"] is not None and state["mcp"].get("enabled") is False))
+import os as _os
+mcp_path = _os.path.join(_os.path.dirname(__file__), "mock_mcp_server.py")
+cfg = json.dumps({"mcpServers": {"mock": {"command": sys.executable, "args": [mcp_path]}}})
+sio.emit("mcp_save_servers", {"json": cfg})
+time.sleep(0.5)
+saved = [s for s in (state["mcp"]["servers"] if state["mcp"] else []) if s["name"] == "mock"]
+results.append(("mcp server saved from json", bool(saved)))
+
+sio.emit("mcp_start_server", {"name": "mock"})
+srv = []
+for _ in range(60):
+    time.sleep(0.1)
+    srv = [s for s in (state["mcp"]["servers"] if state["mcp"] else []) if s["name"] == "mock"]
+    if srv and srv[0]["status"] == "running":
+        break
+results.append(("mcp server started", bool(srv) and srv[0]["status"] == "running"))
+results.append(("mcp tools discovered", bool(srv) and any(t["name"] == "echo" for t in srv[0]["tools"])))
+
+# enable the feature and run a tool-using turn against the mock endpoint
+sio.emit("update_settings", {"mcp_enabled": True, "context_size": 8196, "context_threshold": 95})
+time.sleep(0.3)
+results.append(("mcp enabled broadcast", state["mcp"] is not None and state["mcp"].get("enabled") is True))
+sio.emit("new_session", {"name": "MCP-Test"})
+time.sleep(0.3)
+state["busy"] = []
+state["tokens"].clear()
+sio.emit("send_message", {"text": "please use the tool"})
+for _ in range(200):
+    time.sleep(0.1)
+    if state["busy"] and state["busy"][-1] is False and True in state["busy"]:
+        break
+time.sleep(0.6)
+mmsgs = state["session"]["messages"]
+results.append(("assistant requested a tool call",
+                any(m["role"] == "assistant" and m.get("tool_calls") for m in mmsgs)))
+tool_msgs = [m for m in mmsgs if m["role"] == "tool"]
+results.append(("tool result stored", bool(tool_msgs)))
+results.append(("tool executed via mcp (echo ran)",
+                bool(tool_msgs) and "echo: ping" in (tool_msgs[-1].get("content") or "")))
+results.append(("tool result not in error", bool(tool_msgs) and tool_msgs[-1].get("status") == "ok"))
+final_a = [m for m in mmsgs if m["role"] == "assistant"][-1]
+results.append(("final answer produced after tool", "TOOLDONE" in (final_a.get("clean") or "")))
+results.append(("final answer quotes tool output", "echo: ping" in (final_a.get("clean") or "")))
+results.append(("loop finished cleanly (not streaming)", final_a.get("streaming") is False))
+results.append(("busy toggled once across whole tool loop",
+                state["busy"][0] is True and state["busy"][-1] is False))
+
+# turn the feature off and stop the server so a re-run starts clean
+sio.emit("update_settings", {"mcp_enabled": False})
+time.sleep(0.2)
+sio.emit("mcp_stop_server", {"name": "mock"})
+time.sleep(0.3)
+results.append(("mcp server stopped", state["mcp"] is not None and
+                all(s["status"] != "running" for s in state["mcp"]["servers"] if s["name"] == "mock")))
 
 # 6) persistence on disk
 import os as _os

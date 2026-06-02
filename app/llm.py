@@ -51,9 +51,9 @@ IMAGE_TOKEN_COST = 765
 def message_tokens(msg: dict, chars_per_token: float = 4.0) -> int:
     """Token cost of one chat message incl. a small role/formatting overhead."""
     content = msg.get("content", "")
+    total = 0
     if isinstance(content, list):
         # Vision-style content: a list of {type: text|image_url, …} parts.
-        total = 0
         for part in content:
             if not isinstance(part, dict):
                 continue
@@ -61,8 +61,17 @@ def message_tokens(msg: dict, chars_per_token: float = 4.0) -> int:
                 total += estimate_tokens(part.get("text", "") or "", chars_per_token)
             elif part.get("type") == "image_url":
                 total += IMAGE_TOKEN_COST
-        return total + 4
-    return estimate_tokens(content or "", chars_per_token) + 4
+    else:
+        total += estimate_tokens(content or "", chars_per_token)
+
+    # Tool-call requests (assistant) and the matching results carry weight too.
+    # Accept both the normalized store shape ({name, arguments}) and the OpenAI
+    # wire shape ({function: {name, arguments}}).
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else tc
+        total += estimate_tokens((fn.get("name") or "") + (fn.get("arguments") or ""), chars_per_token)
+        total += 4
+    return total + 4
 
 
 def count_prompt_tokens(messages: list[dict], chars_per_token: float = 4.0) -> int:
@@ -158,12 +167,34 @@ def build_history(messages: list[dict], settings: dict) -> list[dict]:
             if content is None:
                 content = strip_think(m.get("content", ""), op, cl)
             entry = {"role": role, "content": content}
+            # Replay prior tool calls so the model sees its own action history.
+            tcs = m.get("tool_calls")
+            if tcs:
+                entry["tool_calls"] = [{
+                    "id": tc.get("id") or f"call_{i}",
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("name", "") or "",
+                        "arguments": tc.get("arguments") or "{}",
+                    },
+                } for i, tc in enumerate(tcs)]
+            out.append(entry)
+        elif role == "tool":
+            # An observation returned to the model, bound to its call by id.
+            entry = {
+                "role": "tool",
+                "tool_call_id": m.get("tool_call_id") or "",
+                "content": m.get("content", "") or "",
+            }
+            if m.get("name"):
+                entry["name"] = m["name"]
+            out.append(entry)
         else:
             content = _user_content(m.get("content", ""), m.get("images") or [], settings)
             entry = {"role": role, "content": content}
             if role == "user" and settings.get("username"):
                 entry["name"] = settings["username"]
-        out.append(entry)
+            out.append(entry)
     return out
 
 
@@ -195,6 +226,12 @@ def crop_to_context(system_msg: dict, history: list[dict], settings: dict):
         prompt = [system_msg] + history[start:] if system_msg else history[start:]
         if count_prompt_tokens(prompt, cpt) <= budget:
             break
+        start += 1
+
+    # Never lead with an orphaned tool result: a `tool` message is only valid
+    # immediately after the assistant `tool_calls` that produced it, so if the
+    # cut landed on one, advance past the dangling results to the next real turn.
+    while start < n - 1 and history[start].get("role") == "tool":
         start += 1
 
     kept = ([system_msg] if system_msg else []) + history[start:]
@@ -238,13 +275,16 @@ def _render_template(template: str, system_message: str, messages: list[dict]) -
 
 
 def build_request(messages_store: list[dict], settings: dict,
-                  extra_user: str | None = None, extra_images: list | None = None):
+                  extra_user: str | None = None, extra_images: list | None = None,
+                  tools: list | None = None):
     """
     Returns (url, body, headers, debug) ready for a streaming POST.
 
     `messages_store` is the stored session list (no system row). `extra_user`,
     if provided, is appended as a fresh user turn before cropping; `extra_images`
-    attaches that turn's images as a vision content array.
+    attaches that turn's images as a vision content array. `tools`, if given, is
+    the OpenAI `tools` array advertised to the model (chat-completions mode only;
+    the raw /v1/completions template path cannot carry tool schemas).
     """
     op = settings.get("think_open_tag", "<think>")
 
@@ -300,6 +340,10 @@ def build_request(messages_store: list[dict], settings: dict,
     else:
         url = f"{base}/chat/completions"
         body["messages"] = kept
+        # Advertise tools (function-calling) so the model can request a call.
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
 
     debug = {
         "prompt_tokens": prompt_tokens,
@@ -313,21 +357,40 @@ def build_request(messages_store: list[dict], settings: dict,
 # --------------------------------------------------------------------------
 # Streaming
 # --------------------------------------------------------------------------
+def _assemble_tool_calls(acc: dict) -> list[dict]:
+    """Turn the per-index streaming accumulator into ordered, normalized calls."""
+    calls = []
+    for idx in sorted(acc):
+        slot = acc[idx]
+        name = (slot.get("name") or "").strip()
+        if not name:
+            continue
+        calls.append({
+            "id": slot.get("id") or f"call_{idx}",
+            "name": name,
+            "arguments": slot.get("arguments") or "",
+        })
+    return calls
+
+
 def stream_completion(messages_store, settings, user_text, on_delta, stop_flag=None,
-                      user_images=None):
+                      user_images=None, tools=None):
     """
     Drive a streaming generation.
 
     `on_delta(text)` is called for every content chunk. Returns a result dict
-    with the full raw text, the cleaned text, reasoning, and metadata.
-    `user_images`, if given, attach to the latest user turn (vision input).
+    with the full raw text, the cleaned text, reasoning, any tool calls the model
+    requested, and metadata. `user_images`, if given, attach to the latest user
+    turn (vision input). `tools` advertises callable functions to the model.
     """
-    url, body, headers, debug = build_request(messages_store, settings, user_text, user_images)
+    url, body, headers, debug = build_request(messages_store, settings, user_text,
+                                               user_images, tools=tools)
     op = settings.get("think_open_tag", "<think>")
     cl = settings.get("think_close_tag", "</think>")
     is_chat = not settings.get("use_custom_template", False)
 
     raw = []
+    tool_acc: dict[int, dict] = {}   # index -> {id, name, arguments}
     usage = {}
     finish_reason = None
     t0 = time.time()
@@ -360,7 +423,21 @@ def stream_completion(messages_store, settings, user_text, on_delta, stop_flag=N
             finish_reason = choice["finish_reason"]
 
         if is_chat:
-            delta = (choice.get("delta") or {}).get("content")
+            delta_obj = choice.get("delta") or {}
+            delta = delta_obj.get("content")
+            # Tool-call fragments arrive interleaved with content; the function
+            # name lands once up front, then arguments stream in piece by piece,
+            # each tagged with a stable `index`.
+            for tc in delta_obj.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                slot = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] += fn["name"]
+                if fn.get("arguments"):
+                    slot["arguments"] += fn["arguments"]
         else:
             delta = choice.get("text")
         if delta:
@@ -369,6 +446,7 @@ def stream_completion(messages_store, settings, user_text, on_delta, stop_flag=N
 
     elapsed = max(1e-6, time.time() - t0)
     raw_text = "".join(raw)
+    tool_calls = _assemble_tool_calls(tool_acc)
     clean_text = strip_think(raw_text, op, cl)
     think_text = extract_think(raw_text, op, cl)
     had_think = has_think(raw_text, op)
@@ -376,6 +454,11 @@ def stream_completion(messages_store, settings, user_text, on_delta, stop_flag=N
     cpt = settings.get("chars_per_token", 4.0)
     completion_tokens = usage.get("completion_tokens") or estimate_tokens(raw_text, cpt)
     prompt_tokens = usage.get("prompt_tokens") or debug["prompt_tokens"]
+
+    # When the model asks for tools the reported reason is "tool_calls"; surface
+    # that explicitly even if the backend omitted it.
+    if tool_calls and not finish_reason:
+        finish_reason = "tool_calls"
 
     meta = {
         "model": settings.get("model", ""),
@@ -394,6 +477,7 @@ def stream_completion(messages_store, settings, user_text, on_delta, stop_flag=N
         "clean": clean_text,
         "think": think_text,
         "has_think": had_think,
+        "tool_calls": tool_calls,
         "meta": meta,
     }
 
