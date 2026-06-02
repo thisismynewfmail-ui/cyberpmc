@@ -515,7 +515,25 @@ def _emit_tts_audio(seq, wav_bytes, sample_rate):
     })
 
 
-def _execute_tool_calls(sid, tool_calls, name_map):
+def _clip_tool_text(text: str, limit: int) -> str:
+    """Bound a tool result so one oversized observation can't blow the context.
+
+    Browser snapshots in particular can run to hundreds of KB; folded back into
+    the prompt verbatim they push it far past the model's window and the endpoint
+    stalls. We keep a large head (where a snapshot's URL/title and top of the
+    accessibility tree live) plus a small tail, and mark what was dropped so the
+    model knows to narrow its next query."""
+    if not text or limit <= 0 or len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    head = int(limit * 0.85)
+    tail = limit - head
+    marker = (f"\n\n[… {omitted} characters truncated to fit the context window; "
+              f"narrow the query or target a specific element/section …]\n\n")
+    return text[:head] + marker + (text[-tail:] if tail > 0 else "")
+
+
+def _execute_tool_calls(sid, tool_calls, name_map, max_result_chars=0):
     """Run each requested tool through its MCP server, storing a `tool` message
     per call (live "running" → final result) so the transcript shows the work.
 
@@ -561,8 +579,10 @@ def _execute_tool_calls(sid, tool_calls, name_map):
         except Exception as e:  # noqa: BLE001
             out = {"text": f"[tool error] {str(e)[:300]}", "is_error": True}
 
+        # Clip an oversized result (e.g. a huge browser_snapshot) before it is
+        # stored and replayed, so it can't overflow the context window.
         store.update_message(sid, tmsg["id"], {
-            "content": out["text"],
+            "content": _clip_tool_text(out["text"], max_result_chars),
             "status": "error" if out.get("is_error") else "ok",
         })
         broadcast_active()
@@ -641,7 +661,8 @@ def _run_generation(sid, pid, text, images, settings, tools=None, name_map=None)
                 break  # a normal final answer — the turn is complete
 
             # --- transition: run the tools, fold results back into context ---
-            _execute_tool_calls(sid, tool_calls, name_map)
+            _execute_tool_calls(sid, tool_calls, name_map,
+                                max_result_chars=int(settings.get("mcp_max_result_chars", 0) or 0))
 
             if turn == max_iters - 1:
                 socketio.emit("toast", {"text": f"Tool loop cap reached ({max_iters})"})

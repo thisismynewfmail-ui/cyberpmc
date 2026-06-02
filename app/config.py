@@ -154,6 +154,12 @@ DEFAULT_SETTINGS = {
     "mcp_tool_enabled": {},
     # Safety cap on the think→call→observe loop within a single user turn.
     "mcp_max_iterations": 8,
+    # Upper bound on the characters of a single tool result that are folded back
+    # into the conversation. Browser tools (notably browser_snapshot) can emit
+    # hundreds of KB — an unbounded result blows past the context window and the
+    # endpoint stalls on a multi-hundred-thousand-token prompt. Oversized results
+    # are clipped (head + tail, with a marker) so the loop keeps moving. 0 = off.
+    "mcp_max_result_chars": 16000,
 }
 
 # Fields that, when changed, should re-test the endpoint link.
