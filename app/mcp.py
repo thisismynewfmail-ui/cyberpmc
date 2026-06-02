@@ -39,8 +39,10 @@ Design notes
 
 from __future__ import annotations
 
+import glob
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -52,6 +54,77 @@ PROTOCOL_VERSION = "2024-11-05"
 # legitimately take a while, so this is generous.
 DEFAULT_CALL_TIMEOUT = 120.0
 HANDSHAKE_TIMEOUT = 45.0
+
+
+def _candidate_path_dirs() -> list[str]:
+    """Directories to search for a launcher (npx, node, uvx, python, …).
+
+    The app's process often does NOT inherit the interactive shell's PATH — when
+    it is started from a desktop launcher, a service, or an IDE, Node installed
+    via nvm / Homebrew / Volta / fnm is invisible and ``npx`` "isn't found" even
+    though it works in a terminal. We therefore augment PATH with the usual
+    install locations so the command resolves the way it would in a login shell.
+    """
+    dirs: list[str] = []
+    seen: set[str] = set()
+
+    def _add(d: str):
+        if d and d not in seen and os.path.isdir(d):
+            seen.add(d)
+            dirs.append(d)
+
+    for d in (os.environ.get("PATH", "") or "").split(os.pathsep):
+        _add(d)
+
+    home = os.path.expanduser("~")
+    for d in (
+        "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+        "/opt/homebrew/bin", "/opt/homebrew/sbin", "/opt/local/bin",
+        os.path.join(home, ".local", "bin"),
+        os.path.join(home, "bin"),
+        os.path.join(home, ".npm-global", "bin"),
+        os.path.join(home, ".yarn", "bin"),
+        os.path.join(home, ".volta", "bin"),
+        os.path.join(home, ".asdf", "shims"),
+        os.path.join(home, ".cargo", "bin"),
+    ):
+        _add(d)
+
+    # Version-manager installs (newest first so the latest node wins).
+    for pattern in (
+        os.path.join(home, ".nvm", "versions", "node", "*", "bin"),
+        os.path.join(home, ".fnm", "node-versions", "*", "installation", "bin"),
+        os.path.join(home, ".local", "share", "fnm", "node-versions", "*", "installation", "bin"),
+        "/usr/local/n/versions/node/*/bin",
+    ):
+        for d in sorted(glob.glob(pattern), reverse=True):
+            _add(d)
+
+    if os.name == "nt":
+        for var in ("APPDATA", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                _add(os.path.join(base, "npm"))
+                _add(os.path.join(base, "nodejs"))
+        _add(r"C:\Program Files\nodejs")
+    return dirs
+
+
+def _resolve_command(command: str) -> tuple[str | None, str]:
+    """Find ``command`` on an augmented PATH. Returns (resolved_path, search_path).
+
+    ``search_path`` is also handed to the child process so a launcher like
+    ``npx`` can in turn locate ``node``.
+    """
+    dirs = _candidate_path_dirs()
+    search_path = os.pathsep.join(dirs)
+    if not command:
+        return None, search_path
+    # An absolute/relative path that already exists is used as-is.
+    if (os.path.isabs(command) or os.sep in command) and os.path.exists(command):
+        return command, search_path
+    resolved = shutil.which(command, path=search_path)
+    return resolved, search_path
 
 
 def _content_to_text(content) -> str:
@@ -118,11 +191,33 @@ class MCPServer:
             self.status = "starting"
             self.detail = "spawning process…"
             self.tools = []
+        resolved, search_path = _resolve_command(self.command)
+        if not resolved:
+            self._fail(
+                f"command not found: '{self.command}'. Node.js / npx was not on the "
+                f"app's PATH — install Node.js, or set an absolute \"command\" path "
+                f"(e.g. /usr/local/bin/npx) in the server config."
+            )
+            return False
+
+        # Hand the augmented PATH to the child so a launcher like npx can find
+        # node; an explicit PATH in the server's own env still takes priority.
+        full_env = os.environ.copy()
+        full_env.update(self.env)
+        if self.env.get("PATH"):
+            full_env["PATH"] = self.env["PATH"] + os.pathsep + search_path
+        else:
+            full_env["PATH"] = search_path
+
+        # A resolved Windows batch launcher (npx.cmd / npm.cmd) cannot be executed
+        # by CreateProcess directly; route it through the command interpreter.
+        argv = [resolved, *self.args]
+        if os.name == "nt" and resolved.lower().endswith((".cmd", ".bat")):
+            argv = [os.environ.get("COMSPEC", "cmd.exe"), "/c", resolved, *self.args]
+
         try:
-            full_env = os.environ.copy()
-            full_env.update(self.env)
             self._proc = subprocess.Popen(
-                [self.command, *self.args],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
